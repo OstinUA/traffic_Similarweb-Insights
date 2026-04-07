@@ -29,20 +29,16 @@ def get_dataloom_traffic(domain, api_key):
     try:
         response = requests.get(url, headers=headers, params=querystring)
         
-        # Получаем остаток лимитов из скрытых заголовков ответа
         requests_left = response.headers.get('x-ratelimit-requests-remaining', 'Неизвестно')
         
         if response.status_code == 200:
             data = response.json()
             
-            # Умная рекурсивная функция поиска визитов внутри JSON любого уровня вложенности
             def find_visits(obj):
                 if isinstance(obj, dict):
-                    # Ищем ключи на текущем уровне
                     for k, v in obj.items():
                         if k.lower() in ['visits', 'total_visits', 'traffic', 'monthly_visits']:
                             return v
-                    # Если не нашли, копаем глубже
                     for k, v in obj.items():
                         res = find_visits(v)
                         if res is not None:
@@ -59,7 +55,7 @@ def get_dataloom_traffic(domain, api_key):
             if traffic is not None:
                 return traffic, requests_left
             else:
-                return "0", requests_left # Если API вернул пустой ответ без визитов
+                return "0", requests_left
                 
         elif response.status_code == 429:
             return "Лимит исчерпан", 0
@@ -95,6 +91,7 @@ if uploaded_file:
         user_df['_original_order'] = range(len(user_df))
         site_column = user_df.columns[0]
         user_df['Clean_Domain'] = user_df[site_column].apply(clean_url)
+        # Инициализируем колонку как текст
         user_df['Visits'] = '-'
         
     if st.button("Начать сбор трафика", type="primary"):
@@ -104,14 +101,13 @@ if uploaded_file:
         progress_bar = st.progress(0, text="Опрашиваем API...")
         
         for i, domain in enumerate(domains_to_check):
-            # Делаем паузу, чтобы бесплатный тариф не заблокировал за спам запросами
             time.sleep(1.5) 
             
-            # Теперь функция возвращает и трафик, и остаток лимита
             traffic, requests_left = get_dataloom_traffic(domain, api_key)
-            user_df.loc[i, 'Visits'] = traffic
             
-            # Выводим на экран всё вместе
+            # ФИКС ЗДЕСЬ: Оборачиваем traffic в str(), чтобы избежать конфликта типов
+            user_df.loc[i, 'Visits'] = str(traffic)
+            
             progress_text = f"Проверен: {domain} | Визиты: {traffic} | Остаток реквестов: {requests_left}"
             progress_bar.progress((i + 1) / api_limit, text=progress_text)
             
