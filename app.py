@@ -4,7 +4,6 @@ import requests
 import re
 import io
 import time
-import json
 
 def clean_url(url):
     if pd.isna(url):
@@ -20,9 +19,7 @@ def clean_url(url):
 
 def get_dataloom_traffic(domain, api_key):
     url = "https://similarweb-insights.p.rapidapi.com/traffic"
-    
     querystring = {"domain": domain}
-    
     headers = {
         "x-rapidapi-host": "similarweb-insights.p.rapidapi.com",
         "x-rapidapi-key": api_key,
@@ -32,32 +29,49 @@ def get_dataloom_traffic(domain, api_key):
     try:
         response = requests.get(url, headers=headers, params=querystring)
         
+        # Получаем остаток лимитов из скрытых заголовков ответа
+        requests_left = response.headers.get('x-ratelimit-requests-remaining', 'Неизвестно')
+        
         if response.status_code == 200:
             data = response.json()
             
-            # Разные провайдеры называют поле с трафиком по-разному.
-            # Проверяем самые популярные варианты.
-            if 'total_visits' in data:
-                return data['total_visits']
-            elif 'visits' in data:
-                return data['visits']
-            elif 'Traffic' in data:
-                return data['Traffic']
+            # Умная рекурсивная функция поиска визитов внутри JSON любого уровня вложенности
+            def find_visits(obj):
+                if isinstance(obj, dict):
+                    # Ищем ключи на текущем уровне
+                    for k, v in obj.items():
+                        if k.lower() in ['visits', 'total_visits', 'traffic', 'monthly_visits']:
+                            return v
+                    # Если не нашли, копаем глубже
+                    for k, v in obj.items():
+                        res = find_visits(v)
+                        if res is not None:
+                            return res
+                elif isinstance(obj, list):
+                    for item in obj:
+                        res = find_visits(item)
+                        if res is not None:
+                            return res
+                return None
+
+            traffic = find_visits(data)
+            
+            if traffic is not None:
+                return traffic, requests_left
             else:
-                # Если структура ответа неизвестна, выводим весь JSON для отладки
-                st.write(f"Ответ для {domain}:", data)
-                return "См. лог на экране"
+                return "0", requests_left # Если API вернул пустой ответ без визитов
                 
         elif response.status_code == 429:
-            return "Лимит запросов исчерпан"
-        elif response.status_code == 401 or response.status_code == 403:
-            return "Ошибка ключа API"
+            return "Лимит исчерпан", 0
+        elif response.status_code in [401, 403]:
+            return "Ошибка ключа", requests_left
         else:
-            return f"Ошибка API: {response.status_code}"
+            return f"Ошибка {response.status_code}", requests_left
             
     except Exception as e:
-        return "Ошибка соединения"
+        return "Ошибка сети", "Неизвестно"
 
+# --- ИНТЕРФЕЙС ---
 st.set_page_config(page_title="DataLoom Traffic Checker", layout="wide")
 st.title("Сбор трафика через DataLoom (RapidAPI)")
 
@@ -93,10 +107,13 @@ if uploaded_file:
             # Делаем паузу, чтобы бесплатный тариф не заблокировал за спам запросами
             time.sleep(1.5) 
             
-            traffic = get_dataloom_traffic(domain, api_key)
+            # Теперь функция возвращает и трафик, и остаток лимита
+            traffic, requests_left = get_dataloom_traffic(domain, api_key)
             user_df.loc[i, 'Visits'] = traffic
             
-            progress_bar.progress((i + 1) / api_limit, text=f"Проверен: {domain} | Результат: {traffic}")
+            # Выводим на экран всё вместе
+            progress_text = f"Проверен: {domain} | Визиты: {traffic} | Остаток реквестов: {requests_left}"
+            progress_bar.progress((i + 1) / api_limit, text=progress_text)
             
         progress_bar.empty()
         st.success("Сбор данных завершен!")
